@@ -29,4 +29,19 @@ def test_cli_writes_machine_readable_json_summary(tmp_path: Path):
     text = summary.read_text(encoding="utf-8")
     assert '"included_files": 1' in text
     assert '"output"' in text
+    assert '"risk_level": "low"' in text
     assert "context.md" in text
+
+
+def test_cli_writes_markdown_risk_report(tmp_path: Path):
+    (tmp_path / "app.py").write_text('API_KEY="super-secret-value"\n', encoding="utf-8")
+    output = tmp_path / "context.md"
+    report = tmp_path / "risk.md"
+
+    exit_code = run([str(tmp_path), "--output", str(output), "--risk-report", str(report)])
+
+    assert exit_code == 0
+    text = report.read_text(encoding="utf-8")
+    assert "# ai-safe-context Risk Report" in text
+    assert "review-required" in text
+    assert "Secret redactions: 1" in text

@@ -67,6 +67,9 @@ ai-safe-context --exclude "docs/archive/**"
 
 # Write a machine-readable summary for CI or automation
 ai-safe-context --json-summary summary.json
+
+# Write a Markdown risk report before sharing generated context
+ai-safe-context --risk-report risk.md
 ```
 
 ## Positioning
@@ -89,6 +92,7 @@ See [`docs/COMPARISON.md`](docs/COMPARISON.md) for more detail.
 - [x] Secret redaction patterns
 - [x] File size and binary skipping
 - [x] JSON output for automation
+- [x] Markdown risk report for sharing review
 - [ ] Token counting
 - [ ] More precise `.gitignore` semantics
 - [ ] GitHub Action preflight check

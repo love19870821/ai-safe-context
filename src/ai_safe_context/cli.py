@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .core import PackOptions, pack_repository
+from .core import PackOptions, PackSummary, pack_repository
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--json-summary",
         help="Write a machine-readable JSON summary to this path.",
     )
+    parser.add_argument(
+        "--risk-report",
+        help="Write a Markdown risk report with sharing guidance to this path.",
+    )
     return parser
 
 
@@ -66,13 +70,12 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     summary = result.summary
     if args.json_summary:
-        json_summary = Path(args.json_summary)
-        if not json_summary.is_absolute():
-            json_summary = root / json_summary
+        json_summary = _resolve_output_path(root, args.json_summary)
         json_summary.write_text(
             json.dumps(
                 {
                     "output": str(output),
+                    "risk_level": _risk_level(summary),
                     "scanned_files": summary.scanned_files,
                     "included_files": summary.included_files,
                     "skipped_files": summary.skipped_files,
@@ -84,6 +87,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             + "\n",
             encoding="utf-8",
         )
+    if args.risk_report:
+        risk_report = _resolve_output_path(root, args.risk_report)
+        risk_report.write_text(_render_risk_report(summary, output), encoding="utf-8")
     print(f"Generated {output}")
     print(
         "Scanned {scanned} files | Included {included} | Skipped {skipped} | Redacted {redactions}".format(
@@ -96,6 +102,41 @@ def run(argv: Sequence[str] | None = None) -> int:
     if summary.redactions:
         print("Review redactions before sharing. ai-safe-context reduces risk but cannot guarantee 100% safety.")
     return 0
+
+
+def _resolve_output_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
+def _risk_level(summary: PackSummary) -> str:
+    if summary.redactions:
+        return "review-required"
+    if summary.skipped_files:
+        return "low-with-skipped-files"
+    return "low"
+
+
+def _render_risk_report(summary: PackSummary, output: Path) -> str:
+    level = _risk_level(summary)
+    checks = [
+        "Review the generated Markdown before sharing it with any AI system.",
+        "Confirm skipped files are intentionally excluded.",
+        "Do not treat automated redaction as a guarantee of safety.",
+    ]
+    if summary.redactions:
+        checks.insert(0, "Inspect every `[REDACTED:*]` marker and nearby context.")
+    return (
+        "# ai-safe-context Risk Report\n\n"
+        f"- Output: `{output}`\n"
+        f"- Risk level: `{level}`\n"
+        f"- Scanned files: {summary.scanned_files}\n"
+        f"- Included files: {summary.included_files}\n"
+        f"- Skipped files: {summary.skipped_files}\n"
+        f"- Secret redactions: {summary.redactions}\n\n"
+        "## Recommended checks\n\n"
+        + "".join(f"- {check}\n" for check in checks)
+    )
 
 
 def main() -> None:
