@@ -72,6 +72,24 @@ ai-safe-context --json-summary summary.json
 ai-safe-context --risk-report risk.md
 ```
 
+## Project config
+
+Add `.ai-safe-context.yml` to a repository to make repeatable context packs easier for a team or CI job:
+
+```yaml
+max_file_size: 75000
+include:
+  - "src/**/*.py"
+  - "tests/**/*.py"
+exclude:
+  - "src/private.py"
+respect_gitignore: true
+```
+
+For safety, project config cannot disable `.gitignore` handling. Use the explicit `--no-gitignore` CLI flag only for a trusted one-off local run.
+
+CLI flags override config values, so one-off runs can still narrow or expand the generated context.
+
 ## Positioning
 
 `ai-safe-context` is not a full secret scanner and does not claim 100% safety. It is a practical context packer that helps developers reduce accidental leakage before asking AI assistants for help.

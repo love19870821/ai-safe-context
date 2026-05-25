@@ -45,3 +45,22 @@ def test_cli_writes_markdown_risk_report(tmp_path: Path):
     assert "# ai-safe-context Risk Report" in text
     assert "review-required" in text
     assert "Secret redactions: 1" in text
+
+
+def test_cli_uses_project_config_file(tmp_path: Path):
+    (tmp_path / ".ai-safe-context.yml").write_text(
+        "include:\n"
+        "  - 'src/**/*.py'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("skip me\n", encoding="utf-8")
+    output = tmp_path / "context.md"
+
+    exit_code = run([str(tmp_path), "--output", str(output)])
+
+    assert exit_code == 0
+    text = output.read_text(encoding="utf-8")
+    assert "src/app.py" in text
+    assert "notes.md" not in text

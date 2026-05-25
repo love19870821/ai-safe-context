@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 DEFAULT_EXCLUDE_DIRS = {
     ".git",
@@ -82,13 +82,44 @@ class PackResult:
     summary: PackSummary
 
 
+def load_options_from_config(
+    root: Path | str,
+    *,
+    output_name: str = "context.md",
+    max_file_size: int | None = None,
+    include: tuple[str, ...] | None = None,
+    exclude: tuple[str, ...] | None = None,
+    respect_gitignore: bool | None = None,
+) -> PackOptions:
+    """Load pack options from a small project config file and CLI overrides.
+
+    Supported config filenames: `.ai-safe-context.yml`, `.ai-safe-context.yaml`,
+    and `.ai-safe-context.json`. YAML support intentionally handles only the
+    simple scalar/list shape used by this tool so the package remains dependency-free.
+    """
+    root_path = Path(root).resolve()
+    options = PackOptions(output_name=output_name)
+    config_path = _find_config_file(root_path)
+    if config_path:
+        options = _options_from_config_data(_read_config(config_path), output_name=output_name)
+    if max_file_size is not None:
+        options = replace(options, max_file_size=max_file_size)
+    if include is not None:
+        options = replace(options, include=include)
+    if exclude is not None:
+        options = replace(options, exclude=exclude)
+    if respect_gitignore is not None:
+        options = replace(options, respect_gitignore=respect_gitignore)
+    return options
+
+
 def pack_repository(root: Path | str, options: PackOptions | None = None) -> PackResult:
     """Pack a repository into redacted, LLM-ready Markdown."""
     root_path = Path(root).resolve()
     if not root_path.exists() or not root_path.is_dir():
         raise ValueError(f"Repository path does not exist or is not a directory: {root_path}")
 
-    opts = options or PackOptions()
+    opts = options or load_options_from_config(root_path)
     gitignore_patterns = _read_gitignore(root_path) if opts.respect_gitignore else []
 
     entries: list[tuple[str, str]] = []
@@ -141,6 +172,112 @@ def redact_secrets(text: str) -> tuple[str, int]:
     return redacted, redactions
 
 
+def _find_config_file(root: Path) -> Path | None:
+    for name in (".ai-safe-context.yml", ".ai-safe-context.yaml", ".ai-safe-context.json"):
+        path = root / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        import json
+
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"Config must be an object: {path}")
+        return data
+    return _parse_simple_yaml(raw)
+
+
+def _parse_simple_yaml(raw: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    current_list_key: str | None = None
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("-"):
+            if current_list_key is None:
+                raise ValueError("YAML list item found before a list key")
+            data.setdefault(current_list_key, []).append(_parse_scalar(stripped[1:].strip()))
+            continue
+        if ":" not in stripped:
+            raise ValueError(f"Unsupported config line: {line}")
+        key, value = stripped.split(":", 1)
+        key = key.strip().replace("-", "_")
+        value = value.strip()
+        if value == "":
+            data[key] = []
+            current_list_key = key
+        else:
+            data[key] = _parse_scalar(value)
+            current_list_key = None
+    return data
+
+
+def _parse_scalar(value: str) -> Any:
+    unquoted = value.strip().strip("'").strip('"')
+    lowered = unquoted.lower()
+    if lowered in {"true", "yes", "on"}:
+        return True
+    if lowered in {"false", "no", "off"}:
+        return False
+    try:
+        return int(unquoted)
+    except ValueError:
+        return unquoted
+
+
+def _options_from_config_data(data: dict[str, Any], *, output_name: str) -> PackOptions:
+    allowed = {"max_file_size", "include", "exclude", "respect_gitignore"}
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown ai-safe-context config key(s): {', '.join(unknown)}")
+    return PackOptions(
+        output_name=output_name,
+        max_file_size=_coerce_int(data.get("max_file_size", PackOptions.max_file_size), "max_file_size"),
+        include=_coerce_str_tuple(data.get("include", ()), "include"),
+        exclude=_coerce_str_tuple(data.get("exclude", ()), "exclude"),
+        respect_gitignore=PackOptions.respect_gitignore,
+    )
+
+
+def _coerce_int(value: Any, key: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+
+
+def _coerce_bool(value: Any, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered in {"true", "yes", "on"}:
+            return True
+        if lowered in {"false", "no", "off"}:
+            return False
+    raise ValueError(f"{key} must be a boolean")
+
+
+def _coerce_str_tuple(value: Any, key: str) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{key} must contain only strings")
+        return tuple(value)
+    raise ValueError(f"{key} must be a string or list of strings")
+
+
 def _iter_files(root: Path) -> Iterable[Path]:
     for path in root.rglob("*"):
         if path.is_symlink():
@@ -175,13 +312,21 @@ def _should_skip(
         return True
     if path.name == options.output_name:
         return True
-    if options.include and not any(fnmatch.fnmatch(rel, pat) for pat in options.include):
+    if options.include and not any(_matches_pattern(rel, path.name, pat) for pat in options.include):
         return True
-    if any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(path.name, pat) for pat in options.exclude):
+    if any(_matches_pattern(rel, path.name, pat) for pat in options.exclude):
         return True
     if _matches_gitignore(rel, path.name, gitignore_patterns):
         return True
     return False
+
+
+def _matches_pattern(rel: str, name: str, pattern: str) -> bool:
+    normalized = pattern.strip().lstrip("/")
+    variants = {normalized}
+    if "**/" in normalized:
+        variants.add(normalized.replace("**/", ""))
+    return any(fnmatch.fnmatch(rel, variant) or fnmatch.fnmatch(name, variant) for variant in variants)
 
 
 def _matches_gitignore(rel: str, name: str, patterns: list[str]) -> bool:

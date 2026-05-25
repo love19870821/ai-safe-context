@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .core import PackOptions, PackSummary, pack_repository
+from .core import PackSummary, load_options_from_config, pack_repository
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-file-size",
         type=int,
-        default=100_000,
+        default=None,
         help="Maximum included file size in bytes (default: 100000)",
     )
     parser.add_argument(
@@ -58,12 +58,13 @@ def run(argv: Sequence[str] | None = None) -> int:
     if not output.is_absolute():
         output = root / output
 
-    options = PackOptions(
+    options = load_options_from_config(
+        root,
         output_name=output.name,
         max_file_size=args.max_file_size,
-        include=tuple(args.include),
-        exclude=tuple(args.exclude),
-        respect_gitignore=not args.no_gitignore,
+        include=tuple(args.include) if args.include else None,
+        exclude=tuple(args.exclude) if args.exclude else None,
+        respect_gitignore=False if args.no_gitignore else None,
     )
     result = pack_repository(root, options)
     output.write_text(result.markdown, encoding="utf-8")

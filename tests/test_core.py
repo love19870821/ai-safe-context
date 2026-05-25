@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ai_safe_context.core import PackOptions, pack_repository
+from ai_safe_context.core import PackOptions, load_options_from_config, pack_repository
 
 
 def test_pack_repository_redacts_env_secret_and_includes_safe_source(tmp_path: Path):
@@ -72,3 +72,43 @@ def test_pack_repository_skips_symlinks_that_point_outside_root(tmp_path: Path):
     assert "safe.py" in result.markdown
     assert "linked-secret.txt" not in result.markdown
     assert "should-not-be-packed" not in result.markdown
+
+
+def test_load_options_from_config_merges_yaml_defaults(tmp_path: Path):
+    (tmp_path / ".ai-safe-context.yml").write_text(
+        "max_file_size: 10\n"
+        "include:\n"
+        "  - 'src/**/*.py'\n"
+        "exclude:\n"
+        "  - 'src/private.py'\n"
+        "respect_gitignore: false\n",
+        encoding="utf-8",
+    )
+
+    options = load_options_from_config(tmp_path, output_name="packed.md")
+
+    assert options.max_file_size == 10
+    assert options.include == ("src/**/*.py",)
+    assert options.exclude == ("src/private.py",)
+    assert options.respect_gitignore is True
+    assert options.output_name == "packed.md"
+
+
+def test_pack_repository_uses_config_file_when_options_are_not_supplied(tmp_path: Path):
+    (tmp_path / ".ai-safe-context.yml").write_text(
+        "include:\n"
+        "  - 'src/**/*.py'\n"
+        "exclude:\n"
+        "  - 'src/private.py'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "src" / "private.py").write_text("TOKEN='synthetic-secret'\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("skip me\n", encoding="utf-8")
+
+    result = pack_repository(tmp_path)
+
+    assert "src/app.py" in result.markdown
+    assert "src/private.py" not in result.markdown
+    assert "notes.md" not in result.markdown
